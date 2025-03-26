@@ -76,7 +76,6 @@ void loop() {
       Serial.print("Baseline calculated: ");
       Serial.println(baselineValue); // Output the baseline value
     }
-    return; // Exit the loop until calibration is done
   }
 
   // Regular EMG processing after calibration
