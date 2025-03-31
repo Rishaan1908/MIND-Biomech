@@ -100,7 +100,23 @@ void loop() {
 
   for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
     Serial.print("Sensor ");
-    Serial.print(i + 1);
+    if (i + 1 == 1) {
+      Serial.print("pinky");
+    }
+    else if (i + 1 == 2) {
+          Serial.print("ring");
+    }
+    else if (i + 1 == 3) {
+          Serial.print("middle");
+    }
+    else if (i + 1 == 4) {
+          Serial.print("index");
+    }
+    else if (i + 1 == 5) {
+          Serial.print("thumb");
+    }
+    // Serial.print(i + 1);
+    
     Serial.print(": ");
     Serial.print(sensorValues[i]);
     Serial.print("   ");
