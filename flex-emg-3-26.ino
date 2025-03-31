@@ -1,126 +1,188 @@
 #if defined(ARDUINO) && ARDUINO >= 100
-#include "Arduino.h"
+  #include "Arduino.h"
 #else
-#include "WProgram.h"
+  #include "WProgram.h"
 #endif
 
 #include "EMGFilters.h"
 
+// Define constants
 #define TIMING_DEBUG 1
-
-#define SensorInputPin1 A5 // input pin number for sensor 1
 #define NUM_FLEX_SENSORS 5
+#define SAMPLE_RATE SAMPLE_FREQ_1000HZ // EMG filter supports 500Hz or 1000Hz
+#define HUM_FREQ NOTCH_FREQ_50HZ       // Power line interference frequency
 
+// Calibration settings
+const int calibrationDuration = 10000; // 10 seconds in milliseconds
+static const int threshold = 0;        // EMG calibration threshold
 
-EMGFilters myFilter1;
+// Motor and stepper settings
+const int stepsPerRevolution = 1000;
+const int stepDelay = 1000;            // Delay between steps (microseconds)
 
-// discrete filters must work with fixed sample frequency
-// our emg filter only supports SAMPLE_FREQ_500HZ or SAMPLE_FREQ_1000HZ
-int sampleRate = SAMPLE_FREQ_1000HZ;
-
-// power line interference frequency: NOTCH_FREQ_50HZ or NOTCH_FREQ_60HZ
-int humFreq = NOTCH_FREQ_50HZ;
-
-// Calibration threshold
-static int Threshold = 0;
-
-// Baseline variables
-int baselineValue = 0;
-bool isCalibrated = false; // Flag to check if calibration is done
-unsigned long calibrationStartTime = 0; // Stores the start time for calibration
-const unsigned long calibrationDuration = 10000; // 10 seconds in milliseconds
-int sampleCount = 0; // Count the number of samples taken during calibration
-long totalValue = 0; // Accumulate the total value during calibration
-
-unsigned long timeStamp;
-unsigned long timeBudget;
-
-// flex sensor stuff
-
-
+// Pin definitions
 const int sensorPins[NUM_FLEX_SENSORS] = {A0, A1, A2, A3, A4};
-int sensorValues[NUM_FLEX_SENSORS];
+const int emgInputPin = A5;
+const int stepPinThumb = 9, dirPinThumb = 8;
+const int stepPinPoint = 3, dirPinPoint = 2;
+const int stepPinFingers = 5, dirPinFingers = 4;
 
+// Global variables
+EMGFilters emgFilter;
+int baselineEmgValue = 0;
+bool isCalibrated = false;
+unsigned long calibrationStartTime = 0;
+int totalEmgValue = 0;
+int sampleCount = 0;
+int sensorValues[NUM_FLEX_SENSORS];
+int baselineFlexSensorValues[NUM_FLEX_SENSORS] = {0};
+
+// Function Prototypes
+void calibrateSensors();
+void readFlexSensors();
+void tightenMotors(bool thumb, bool point, bool fingers);
+void loosenMotors(bool thumb, bool point, bool fingers);
+void stopMotors();
 
 void setup() {
-  myFilter1.init(sampleRate, humFreq, true, true, true);
-
   Serial.begin(9600);
+  
+  // Initialize EMG Filter
+  emgFilter.init(SAMPLE_RATE, HUM_FREQ, true, true, true);
 
-  timeBudget = 1e6 / sampleRate;
-
-  // flex sensor set up.
+  // Flex sensor pin setup
   for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
     pinMode(sensorPins[i], INPUT);
   }
+
+  // Motor pin setup
+  pinMode(stepPinThumb, OUTPUT);
+  pinMode(dirPinThumb, OUTPUT);
+  pinMode(stepPinPoint, OUTPUT);
+  pinMode(dirPinPoint, OUTPUT);
+  pinMode(stepPinFingers, OUTPUT);
+  pinMode(dirPinFingers, OUTPUT);
 
   // Start calibration
   calibrationStartTime = millis();
 }
 
 void loop() {
-  // Check if the system is still in calibration mode (first 10 seconds)
   if (!isCalibrated) {
-    unsigned long currentTime = millis();
-    
-    // During calibration (within the first 10 seconds)
-    if (currentTime - calibrationStartTime < calibrationDuration) {
-      int Value1 = analogRead(SensorInputPin1); // Read EMG sensor value
-      int DataAfterFilter1 = myFilter1.update(Value1); // Filter the signal
-      totalValue += DataAfterFilter1; // Accumulate the filtered value
-      sampleCount++; // Increment the sample count
-    } else {
-      // Calibration period has ended
-      baselineValue = totalValue / sampleCount; // Calculate the average baseline value
-      isCalibrated = true; // Set flag to indicate calibration is done
-      Serial.print("Baseline calculated: ");
-      Serial.println(baselineValue); // Output the baseline value
-    }
+    calibrateSensors();
     return;
   }
 
   // Regular EMG processing after calibration
-  timeStamp = micros();
-  int Value1 = analogRead(SensorInputPin1);
-  int DataAfterFilter1 = myFilter1.update(Value1);
-  int envlope1 = sq(DataAfterFilter1);
-
-  // Adjust the envelope relative to the baseline
-  envlope1 = envlope1 - baselineValue;
-  envlope1 = (envlope1 > Threshold) ? envlope1 : 0;
-
-  timeStamp = micros() - timeStamp;
+  unsigned long timeStamp = micros();
+  int emgValue = analogRead(emgInputPin);
+  int filteredEmgValue = emgFilter.update(emgValue);
+  int envelope = sq(filteredEmgValue) - baselineEmgValue;
+  envelope = (envelope > threshold) ? envelope : 0;
+  
   if (TIMING_DEBUG) {
-    Serial.println(envlope1);
+    Serial.println(envelope);
   }
 
+  readFlexSensors();
+
+  delayMicroseconds(10000);  // Delay for smoother reading
+}
+
+// --- Calibration Functions ---
+
+void calibrateSensors() {
+  unsigned long currentTime = millis();
+  if (currentTime - calibrationStartTime < calibrationDuration) {
+    int emgValue = analogRead(emgInputPin);
+    int filteredEmgValue = emgFilter.update(emgValue);
+    totalEmgValue += filteredEmgValue;
+    sampleCount++;
+
+    // Accumulate sensor values for baseline calibration
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+      sensorValues[i] = analogRead(sensorPins[i]);
+      baselineFlexSensorValues[i] += sensorValues[i];
+    }
+  } else {
+    // Calibration done, calculate baselines
+    baselineEmgValue = totalEmgValue / sampleCount;
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+      baselineFlexSensorValues[i] /= sampleCount;
+    }
+    
+    isCalibrated = true;
+    Serial.println("Calibration Complete. Baseline EMG Value: ");
+    Serial.println(baselineEmgValue);
+  }
+}
+
+// --- Flex Sensor Functions ---
+
+void readFlexSensors() {
   for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
     sensorValues[i] = analogRead(sensorPins[i]);
-  }
 
-  for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-    Serial.print("Sensor ");
-    if (i + 1 == 1) {
-      Serial.print("pinky");
+    // Print sensor values with names
+    String sensorName;
+    switch (i) {
+      case 0: sensorName = "Pinky"; break;
+      case 1: sensorName = "Ring"; break;
+      case 2: sensorName = "Middle"; break;
+      case 3: sensorName = "Index"; break;
+      case 4: sensorName = "Thumb"; break;
     }
-    else if (i + 1 == 2) {
-          Serial.print("ring");
-    }
-    else if (i + 1 == 3) {
-          Serial.print("middle");
-    }
-    else if (i + 1 == 4) {
-          Serial.print("index");
-    }
-    else if (i + 1 == 5) {
-          Serial.print("thumb");
-    }
-    // Serial.print(i + 1);
-    
-    Serial.print(": ");
+    Serial.print(sensorName + ": ");
     Serial.print(sensorValues[i]);
     Serial.print("   ");
   }
+  Serial.println();
+}
 
-  delayMicroseconds(10000);
+// --- Motor Control Functions ---
+
+void tightenMotors(bool thumb, bool point, bool fingers) {
+  digitalWrite(dirPinThumb, LOW);
+  digitalWrite(dirPinPoint, LOW);
+  digitalWrite(dirPinFingers, HIGH);
+  
+  for (int x = 0; x < stepsPerRevolution; x++) {
+    if (thumb) digitalWrite(stepPinThumb, HIGH);
+    if (point) digitalWrite(stepPinPoint, HIGH);
+    if (fingers) digitalWrite(stepPinFingers, HIGH);
+    
+    delayMicroseconds(stepDelay);
+    
+    if (thumb) digitalWrite(stepPinThumb, LOW);
+    if (point) digitalWrite(stepPinPoint, LOW);
+    if (fingers) digitalWrite(stepPinFingers, LOW);
+    
+    delayMicroseconds(stepDelay);
+  }
+}
+
+void loosenMotors(bool thumb, bool point, bool fingers) {
+  digitalWrite(dirPinThumb, HIGH);
+  digitalWrite(dirPinPoint, HIGH);
+  digitalWrite(dirPinFingers, LOW);
+  
+  for (int x = 0; x < stepsPerRevolution; x++) {
+    if (thumb) digitalWrite(stepPinThumb, HIGH);
+    if (point) digitalWrite(stepPinPoint, HIGH);
+    if (fingers) digitalWrite(stepPinFingers, HIGH);
+    
+    delayMicroseconds(stepDelay);
+    
+    if (thumb) digitalWrite(stepPinThumb, LOW);
+    if (point) digitalWrite(stepPinPoint, LOW);
+    if (fingers) digitalWrite(stepPinFingers, LOW);
+    
+    delayMicroseconds(stepDelay);
+  }
+}
+
+void stopMotors() {
+  digitalWrite(stepPinThumb, LOW);
+  digitalWrite(stepPinPoint, LOW);
+  digitalWrite(stepPinFingers, LOW);
 }
