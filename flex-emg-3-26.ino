@@ -35,7 +35,7 @@ unsigned long calibrationStartTime = 0;
 int totalEmgValue = 0;
 int sampleCount = 0;
 int sensorValues[NUM_FLEX_SENSORS];
-int baselineFlexSensorValues[NUM_FLEX_SENSORS] = {0};
+long baselineFlexSensorValues[NUM_FLEX_SENSORS] = {0, 0, 0, 0, 0};
 
 // Function Prototypes
 void calibrateSensors();
@@ -102,18 +102,26 @@ void calibrateSensors() {
     // Accumulate sensor values for baseline calibration
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
       sensorValues[i] = analogRead(sensorPins[i]);
+      Serial.println(sensorValues[i]);
       baselineFlexSensorValues[i] += sensorValues[i];
     }
   } else {
     // Calibration done, calculate baselines
     baselineEmgValue = totalEmgValue / sampleCount;
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+      Serial.println(baselineFlexSensorValues[i]);
       baselineFlexSensorValues[i] /= sampleCount;
     }
+    Serial.print("Sample Count");
+    Serial.println(sampleCount);
     
     isCalibrated = true;
     Serial.println("Calibration Complete. Baseline EMG Value: ");
     Serial.println(baselineEmgValue);
+
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+      Serial.println(baselineFlexSensorValues[i]);
+    }
   }
 }
 
