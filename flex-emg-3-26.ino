@@ -17,8 +17,13 @@ const int calibrationDuration = 10000; // 10 seconds in milliseconds
 static const int threshold = 0;        // EMG calibration threshold
 
 // Motor and stepper settings
-const int stepsPerRevolution = 1000;
+const int stepsPerRevolution = 200;
 const int stepDelay = 1000;            // Delay between steps (microseconds)
+// Motor-specific step settings
+const int stepsThumb = 200;
+const int stepsIndex = 400;
+const int stepsFingers = 450;
+
 
 // Pin definitions
 const int sensorPins[NUM_FLEX_SENSORS] = {A0, A1, A2, A3, A4};
@@ -26,6 +31,10 @@ const int emgInputPin = A5;
 const int stepPinThumb = 9, dirPinThumb = 8;
 const int stepPinPoint = 3, dirPinPoint = 2;
 const int stepPinFingers = 5, dirPinFingers = 4;
+
+bool thumbMotor = false;
+bool indexMotor = false;
+bool fingersMotor = false;
 
 // Global variables
 EMGFilters emgFilter;
@@ -84,9 +93,9 @@ void loop() {
     Serial.println(envelope);
   }
 
-  readFlexSensors();
+  readFlexSensors(envelope);
 
-  delayMicroseconds(10000);  // Delay for smoother reading
+  delayMicroseconds(100);  // Delay for smoother reading
 }
 
 // --- Calibration Functions ---
@@ -114,6 +123,8 @@ void calibrateSensors() {
     }
     Serial.print("Sample Count");
     Serial.println(sampleCount);
+    Serial.print("Total EMG Val");
+    Serial.println(totalEmgValue);
     
     isCalibrated = true;
     Serial.println("Calibration Complete. Baseline EMG Value: ");
@@ -126,68 +137,135 @@ void calibrateSensors() {
 }
 
 // --- Flex Sensor Functions ---
+void readFlexSensors(int emg_value) {
+  // Step 1: Read each flex sensor and store value
+  sensorValues[0] = analogRead(sensorPins[0]); // Pinky
+  sensorValues[1] = analogRead(sensorPins[1]); // Ring
+  sensorValues[2] = analogRead(sensorPins[2]); // Middle
+  sensorValues[3] = analogRead(sensorPins[3]); // Index
+  sensorValues[4] = analogRead(sensorPins[4]); // Thumb
 
-void readFlexSensors() {
-  for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-    sensorValues[i] = analogRead(sensorPins[i]);
+  // Step 2: Check which fingers are triggered
+  bool pinkyTriggered  = (baselineFlexSensorValues[0] - sensorValues[0] > 100);
+  bool ringTriggered   = (baselineFlexSensorValues[1] - sensorValues[1] > 100);
+  bool middleTriggered = (baselineFlexSensorValues[2] - sensorValues[2] > 100);
+  bool indexTriggered  = (baselineFlexSensorValues[3] - sensorValues[3] > 100);
+  bool thumbTriggered  = (baselineFlexSensorValues[4] - sensorValues[4] > 100);
 
-    // Print sensor values with names
-    String sensorName;
-    switch (i) {
-      case 0: sensorName = "Pinky"; break;
-      case 1: sensorName = "Ring"; break;
-      case 2: sensorName = "Middle"; break;
-      case 3: sensorName = "Index"; break;
-      case 4: sensorName = "Thumb"; break;
+  // Step 3: Debug print
+  Serial.print("Pinky: "); Serial.print(sensorValues[0]); Serial.print("   ");
+  Serial.print("Ring: "); Serial.print(sensorValues[1]); Serial.print("   ");
+  Serial.print("Middle: "); Serial.print(sensorValues[2]); Serial.print("   ");
+  Serial.print("Index: "); Serial.print(sensorValues[3]); Serial.print("   ");
+  Serial.print("Thumb: "); Serial.println(sensorValues[4]);
+
+  // Step 4: Prioritized logic
+  if (thumbTriggered && indexTriggered && middleTriggered && ringTriggered && pinkyTriggered) {
+    if (!thumbMotor && !indexMotor && !fingersMotor) {
+      Serial.println("All fingers flexed. Moving all motors.");
+      tightenMotors(true, true, true);
+      delay(1000);
+      loosenMotors(true, true, true);
     }
-    Serial.print(sensorName + ": ");
-    Serial.print(sensorValues[i]);
-    Serial.print("   ");
+  } 
+  else if (thumbTriggered && indexTriggered) {
+    if (!thumbMotor && !indexMotor) {
+      Serial.println("Thumb + Index triggered.");
+      tightenMotors(true, true, false);
+      delay(1000);
+      loosenMotors(true, true, false);
+    }
+  } 
+  else if (indexTriggered && (middleTriggered || ringTriggered || pinkyTriggered)) {
+    if (!indexMotor && !fingersMotor) {
+      Serial.println("Index + Fingers triggered.");
+      tightenMotors(false, true, true);
+      delay(1000);
+      loosenMotors(false, true, true);
+    }
+  } 
+  else {
+    // Individual motor movement
+    if (indexTriggered && !indexMotor && !thumbMotor && !fingersMotor ) {
+      Serial.println("All fingers flexed. Moving all motors.");
+      tightenMotors(true, true, true);
+      delay(5000);
+      loosenMotors(true, true, true);
+      /*
+      Serial.println("Index only triggered.");
+      tightenMotors(false, true, false);
+      delay(1000);
+      loosenMotors(false, true, false);
+      */
+    }
+
+    if ((middleTriggered || ringTriggered || pinkyTriggered) && !fingersMotor) {
+      Serial.println("Fingers only triggered.");
+      tightenMotors(false, false, true);
+      delay(1000);
+      loosenMotors(false, false, true);
+    }
+
+    if (thumbTriggered && !thumbMotor) {
+      Serial.println("Thumb only triggered.");
+      tightenMotors(true, false, false);
+      delay(1000);
+      loosenMotors(true, false, false);
+    }
   }
-  Serial.println();
 }
 
 // --- Motor Control Functions ---
-
 void tightenMotors(bool thumb, bool point, bool fingers) {
+  Serial.println("Tightening");
   digitalWrite(dirPinThumb, LOW);
   digitalWrite(dirPinPoint, LOW);
   digitalWrite(dirPinFingers, HIGH);
-  
-  for (int x = 0; x < stepsPerRevolution; x++) {
-    if (thumb) digitalWrite(stepPinThumb, HIGH);
-    if (point) digitalWrite(stepPinPoint, HIGH);
-    if (fingers) digitalWrite(stepPinFingers, HIGH);
-    
+
+  for (int x = 0; x < max(max(stepsThumb, stepsIndex), stepsFingers); x++) {
+    if (thumb && x < stepsThumb) digitalWrite(stepPinThumb, HIGH);
+    if (point && x < stepsIndex) digitalWrite(stepPinPoint, HIGH);
+    if (fingers && x < stepsFingers) digitalWrite(stepPinFingers, HIGH);
+
     delayMicroseconds(stepDelay);
-    
-    if (thumb) digitalWrite(stepPinThumb, LOW);
-    if (point) digitalWrite(stepPinPoint, LOW);
-    if (fingers) digitalWrite(stepPinFingers, LOW);
-    
+
+    if (thumb && x < stepsThumb) digitalWrite(stepPinThumb, LOW);
+    if (point && x < stepsIndex) digitalWrite(stepPinPoint, LOW);
+    if (fingers && x < stepsFingers) digitalWrite(stepPinFingers, LOW);
+
     delayMicroseconds(stepDelay);
   }
+
+  if (point) indexMotor = true;
+  if (thumb) thumbMotor = true;
+  if (fingers) fingersMotor = true;
 }
+
 
 void loosenMotors(bool thumb, bool point, bool fingers) {
   digitalWrite(dirPinThumb, HIGH);
   digitalWrite(dirPinPoint, HIGH);
   digitalWrite(dirPinFingers, LOW);
-  
-  for (int x = 0; x < stepsPerRevolution; x++) {
-    if (thumb) digitalWrite(stepPinThumb, HIGH);
-    if (point) digitalWrite(stepPinPoint, HIGH);
-    if (fingers) digitalWrite(stepPinFingers, HIGH);
-    
+
+  for (int x = 0; x < max(max(stepsThumb, stepsIndex), stepsFingers); x++) {
+    if (thumb && x < stepsThumb) digitalWrite(stepPinThumb, HIGH);
+    if (point && x < stepsIndex) digitalWrite(stepPinPoint, HIGH);
+    if (fingers && x < stepsFingers) digitalWrite(stepPinFingers, HIGH);
+
     delayMicroseconds(stepDelay);
-    
-    if (thumb) digitalWrite(stepPinThumb, LOW);
-    if (point) digitalWrite(stepPinPoint, LOW);
-    if (fingers) digitalWrite(stepPinFingers, LOW);
-    
+
+    if (thumb && x < stepsThumb) digitalWrite(stepPinThumb, LOW);
+    if (point && x < stepsIndex) digitalWrite(stepPinPoint, LOW);
+    if (fingers && x < stepsFingers) digitalWrite(stepPinFingers, LOW);
+
     delayMicroseconds(stepDelay);
   }
+
+  if (point) indexMotor = false;
+  if (thumb) thumbMotor = false;
+  if (fingers) fingersMotor = false;
 }
+
 
 void stopMotors() {
   digitalWrite(stepPinThumb, LOW);
