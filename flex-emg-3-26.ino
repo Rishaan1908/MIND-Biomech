@@ -99,9 +99,10 @@ void loop() {
 }
 
 // --- Calibration Functions ---
-
 void calibrateSensors() {
   unsigned long currentTime = millis();
+  int timeRemaining = (calibrationDuration - (currentTime - calibrationStartTime)) / 1000;
+
   if (currentTime - calibrationStartTime < calibrationDuration) {
     int emgValue = analogRead(emgInputPin);
     int filteredEmgValue = emgFilter.update(emgValue);
@@ -111,28 +112,38 @@ void calibrateSensors() {
     // Accumulate sensor values for baseline calibration
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
       sensorValues[i] = analogRead(sensorPins[i]);
-      Serial.println(sensorValues[i]);
       baselineFlexSensorValues[i] += sensorValues[i];
     }
+
+    // Print only once per second
+    static int lastPrintedSecond = -1;
+    if (timeRemaining != lastPrintedSecond) {
+      Serial.print("EMG and Flex sensors calibration in process: Please do not move your hand or fingers. ");
+      Serial.print("Time remaining: ");
+      Serial.print(timeRemaining);
+      Serial.println(" seconds");
+      lastPrintedSecond = timeRemaining;
+    }
+
   } else {
     // Calibration done, calculate baselines
     baselineEmgValue = totalEmgValue / sampleCount;
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
-      Serial.println(baselineFlexSensorValues[i]);
       baselineFlexSensorValues[i] /= sampleCount;
     }
-    Serial.print("Sample Count");
-    Serial.println(sampleCount);
-    Serial.print("Total EMG Val");
-    Serial.println(totalEmgValue);
-    
-    isCalibrated = true;
-    Serial.println("Calibration Complete. Baseline EMG Value: ");
-    Serial.println(baselineEmgValue);
 
+    Serial.println("Calibration Complete.");
+    Serial.print("Baseline EMG Value: ");
+    Serial.println(baselineEmgValue);
+    Serial.println("Baseline Flex Sensor Values:");
     for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+      Serial.print("Sensor ");
+      Serial.print(i);
+      Serial.print(": ");
       Serial.println(baselineFlexSensorValues[i]);
     }
+
+    isCalibrated = true;
   }
 }
 
