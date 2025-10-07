@@ -1,0 +1,243 @@
+#if defined(ARDUINO) && ARDUINO >= 100
+  #include "Arduino.h"
+#else
+  #include "WProgram.h"
+#endif
+
+#include <AccelStepper.h>
+#include "EMGFilters.h"
+
+// Define constants
+#define TIMING_DEBUG 1
+#define NUM_FLEX_SENSORS 5
+#define SAMPLE_RATE SAMPLE_FREQ_1000HZ // EMG filter supports 500Hz or 1000Hz
+#define HUM_FREQ NOTCH_FREQ_50HZ       // Power line interference frequency
+
+// Calibration settings
+const int calibrationDuration = 10000; // 10 seconds
+static const int threshold = 0;        // EMG calibration threshold
+
+// Motor and stepper settings
+const int stepsPerRevolution = 200;
+const int stepDelay = 1000;
+const int stepsThumb = 200;
+const int stepsIndex = 400;
+const int stepsFingers = 450;
+const int maxSpeed = 800;
+const int accel = 600;
+
+// Idle disable settings
+const int ENABLE_PIN = 10;             // Shared enable pin (LOW = enabled)
+const unsigned long IDLE_TIMEOUT = 3000; // 3 seconds
+unsigned long lastMoveTime = 0;
+bool motorsEnabled = true;
+
+// Pin definitions
+const int sensorPins[NUM_FLEX_SENSORS] = {A0, A1, A2, A3, A4};
+const int emgInputPin = A5;
+const int stepPinThumb = 9, dirPinThumb = 8;
+const int stepPinPoint = 3, dirPinPoint = 2;
+const int stepPinFingers = 5, dirPinFingers = 4;
+
+// Global variables
+EMGFilters emgFilter;
+int baselineEmgValue = 0;
+bool isCalibrated = false;
+unsigned long calibrationStartTime = 0;
+int totalEmgValue = 0;
+int sampleCount = 0;
+int sensorValues[NUM_FLEX_SENSORS];
+long baselineFlexSensorValues[NUM_FLEX_SENSORS] = {0, 0, 0, 0, 0};
+
+// Stepper motor instances (DRIVER mode)
+AccelStepper thumbMotor(AccelStepper::DRIVER, stepPinThumb, dirPinThumb);
+AccelStepper indexMotor(AccelStepper::DRIVER, stepPinPoint, dirPinPoint);
+AccelStepper fingersMotor(AccelStepper::DRIVER, stepPinFingers, dirPinFingers);
+
+// Function Prototypes
+void calibrateSensors();
+void readFlexSensors();
+void moveMotor(AccelStepper &motor, int steps, bool tighten);
+void setupMotors();
+void enableMotors();
+void disableMotors();
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Initialize EMG Filter
+  emgFilter.init(SAMPLE_RATE, HUM_FREQ, true, true, true);
+
+  // Flex sensor pin setup
+  for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+    pinMode(sensorPins[i], INPUT);
+  }
+
+  // Motor pin setup
+  pinMode(stepPinThumb, OUTPUT);
+  pinMode(dirPinThumb, OUTPUT);
+  pinMode(stepPinPoint, OUTPUT);
+  pinMode(dirPinPoint, OUTPUT);
+  pinMode(stepPinFingers, OUTPUT);
+  pinMode(dirPinFingers, OUTPUT);
+
+  // Enable pin setup
+  pinMode(ENABLE_PIN, OUTPUT);
+  digitalWrite(ENABLE_PIN, LOW); // Motors start enabled
+
+  // Motor setup
+  setupMotors();
+
+  // Start calibration
+  calibrationStartTime = millis();
+  Serial.println("Thumb Index Middle Ring Pinky");
+}
+
+void loop() {
+  if (!isCalibrated) {
+    calibrateSensors();
+    return;
+  }
+
+  // Process flex sensors
+  readFlexSensors();
+
+  // Continuously run motors
+  thumbMotor.run();
+  indexMotor.run();
+  fingersMotor.run();
+
+  // Check if any motor is active
+  bool anyRunning = thumbMotor.isRunning() || indexMotor.isRunning() || fingersMotor.isRunning();
+
+  if (anyRunning) {
+    lastMoveTime = millis();
+    if (!motorsEnabled) enableMotors();
+  } else {
+    if (motorsEnabled && (millis() - lastMoveTime > IDLE_TIMEOUT)) {
+      disableMotors();
+    }
+  }
+}
+
+// --- Calibration ---
+void calibrateSensors() {
+  unsigned long currentTime = millis();
+  int timeRemaining = (calibrationDuration - (currentTime - calibrationStartTime)) / 1000;
+
+  if (currentTime - calibrationStartTime < calibrationDuration) {
+    int emgValue = analogRead(emgInputPin);
+    int filteredEmgValue = emgFilter.update(emgValue);
+    totalEmgValue += filteredEmgValue;
+    sampleCount++;
+
+    // Accumulate sensor values
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
+      sensorValues[i] = analogRead(sensorPins[i]);
+      baselineFlexSensorValues[i] += sensorValues[i];
+    }
+
+    // Print once per second
+    static int lastPrintedSecond = -1;
+    if (timeRemaining != lastPrintedSecond) {
+      Serial.print("Calibrating... Time left: ");
+      Serial.print(timeRemaining);
+      Serial.println(" sec");
+      lastPrintedSecond = timeRemaining;
+    }
+
+  } else {
+    // Calculate baselines
+    baselineEmgValue = totalEmgValue / sampleCount;
+    for (int i = 0; i < NUM_FLEX_SENSORS; i++)
+      baselineFlexSensorValues[i] /= sampleCount;
+
+    Serial.println("Calibration complete!");
+    isCalibrated = true;
+  }
+}
+
+// --- Motor Setup ---
+void setupMotors() {
+  thumbMotor.setMaxSpeed(maxSpeed);
+  thumbMotor.setAcceleration(accel);
+  indexMotor.setMaxSpeed(maxSpeed);
+  indexMotor.setAcceleration(accel);
+  fingersMotor.setMaxSpeed(maxSpeed);
+  fingersMotor.setAcceleration(accel);
+}
+
+// --- Flex Sensor Processing ---
+void readFlexSensors() {
+  for (int i = 0; i < NUM_FLEX_SENSORS; i++)
+    sensorValues[i] = analogRead(sensorPins[i]);
+
+  bool pinkyTriggered  = (baselineFlexSensorValues[0] - sensorValues[0] > 100);
+  bool ringTriggered   = (baselineFlexSensorValues[1] - sensorValues[1] > 100);
+  bool middleTriggered = (baselineFlexSensorValues[2] - sensorValues[2] > 100);
+  bool indexTriggered  = (baselineFlexSensorValues[3] - sensorValues[3] > 100);
+  bool thumbTriggered  = (baselineFlexSensorValues[4] - sensorValues[4] > 100);
+
+  // Serial plotter output
+  for (int i = 4; i >= 0; i--) {
+    Serial.print(sensorValues[i]);
+    Serial.print(" ");
+  }
+  Serial.println();
+
+  // Priority motion logic
+  if (thumbTriggered && indexTriggered && middleTriggered && ringTriggered && pinkyTriggered) {
+    Serial.println("All fingers flexed. Moving all motors.");
+    moveMotor(thumbMotor, stepsThumb, true);
+    moveMotor(indexMotor, stepsIndex, true);
+    moveMotor(fingersMotor, stepsFingers, true);
+  } 
+  else if (thumbTriggered && indexTriggered) {
+    Serial.println("Thumb + Index triggered.");
+    moveMotor(thumbMotor, stepsThumb, true);
+    moveMotor(indexMotor, stepsIndex, true);
+  } 
+  else if (indexTriggered && (middleTriggered || ringTriggered || pinkyTriggered)) {
+    Serial.println("Index + Fingers triggered.");
+    moveMotor(indexMotor, stepsIndex, true);
+    moveMotor(fingersMotor, stepsFingers, true);
+  } 
+  else {
+    if (indexTriggered) {
+      Serial.println("Index only triggered.");
+      moveMotor(indexMotor, stepsIndex, true);
+    }
+    if (middleTriggered || ringTriggered || pinkyTriggered) {
+      Serial.println("Fingers only triggered.");
+      moveMotor(fingersMotor, stepsFingers, true);
+    }
+    if (thumbTriggered) {
+      Serial.println("Thumb only triggered.");
+      moveMotor(thumbMotor, stepsThumb, true);
+    }
+  }
+}
+
+// --- Motor Control ---
+void moveMotor(AccelStepper &motor, int steps, bool tighten) {
+  long targetPos = 0;
+  if (tighten) {
+    targetPos = motor.currentPosition() + steps;
+  } else {
+    targetPos = motor.currentPosition() - steps;
+  }
+  motor.moveTo(targetPos);
+}
+
+// --- Enable/Disable Motors ---
+void enableMotors() {
+  digitalWrite(ENABLE_PIN, LOW);
+  motorsEnabled = true;
+  Serial.println("Motors enabled.");
+}
+
+void disableMotors() {
+  digitalWrite(ENABLE_PIN, HIGH); // Disable (freewheel)
+  motorsEnabled = false;
+  Serial.println("Motors disabled after inactivity.");
+}
