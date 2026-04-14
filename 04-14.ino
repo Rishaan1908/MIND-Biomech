@@ -95,10 +95,10 @@ void loop() {
     return;
   } else if (!deviationCalibrated) {
     calibrateDeviation();
-    Serial.print("Thumb deviation threshold: ")
-    Serial.println(flexThreshold[0])
-    Serial.print("Fingers deviation threshold: ")
-    Serial.println(flexThreshold[1])
+    Serial.print("Thumb deviation threshold: ");
+    Serial.println(flexThreshold[0]);
+    Serial.print("Fingers deviation threshold: ");
+    Serial.println(flexThreshold[1]);
     return;
   }
 
@@ -246,10 +246,10 @@ void readFlexSensors() {
 
   // Map groups to motors
   // Thumb
-  processFinger(thumbTriggered/* && forceThumbTriggered*/, 0, moveThumb);
+  processFinger(thumbTriggered && forceThumbTriggered, 0, moveThumb);
 
   // Fingers
-  processFinger(indexTriggered || middleTriggered || ringTriggered || pinkyTriggered/* && forceIndexTriggered*/, 1, moveFingers);
+  processFinger(indexTriggered || middleTriggered || ringTriggered || pinkyTriggered && forceIndexTriggered, 1, moveFingers);
 
 }
 
