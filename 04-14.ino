@@ -15,8 +15,8 @@ const int calibrationDuration = 5000;
 
 const int sensorPins[NUM_FLEX_SENSORS] = { A0, A1, A2, A3, A4 }; // A0 is thumb
 // Servo pins
-const int thumbServoPin = 3;
-const int fingersServoPin = 4;
+const int thumbServoPin = 2;
+const int fingersServoPin = 3;
 
 // Servo objects
 Servo thumbServo;
@@ -143,16 +143,19 @@ void calibrateSensors() {
 // Calibrate deviation threshold to use
 void calibrateDeviation() {
   const char* fingers[] = {"thumb", "index", "middle", "ring", "pinky"};
+  flexThreshold[0] = 0;
+  flexThreshold[1] = 0;
   for (int i = 0; i < NUM_FLEX_SENSORS; i++) {
     Serial.print("Flex ");
     Serial.print(fingers[i]);
     Serial.println(" for calibration");
     int baselineValue = baselineFlexSensorValues[i];
-    int currentValue = 0;
+    int currentValue = baselineFlexSensorValues[i];
     int deviation = 0;
-    while (currentValue - baselineValue <= DEVIATION_THRESHOLD) {
-      int currentValue = analogRead(sensorPins[i]);
-      deviation = currentValue - baselineValue;
+    while (baselineValue - currentValue <= DEVIATION_THRESHOLD) {
+      currentValue = analogRead(sensorPins[i]);
+      deviation = baselineValue - currentValue;
+      delay(5);
     }
     if (i == 0) {
       // Thumb
@@ -161,6 +164,8 @@ void calibrateDeviation() {
       // Fingers
       flexThreshold[1] += deviation;
     }
+    Serial.println("Relax finger");
+    delay(1500);
   }
   flexThreshold[1] /= 4;
   deviationCalibrated = true;
@@ -246,10 +251,10 @@ void readFlexSensors() {
 
   // Map groups to motors
   // Thumb
-  processFinger(thumbTriggered && forceThumbTriggered, 0, moveThumb);
+  processFinger(thumbTriggered/* && forceThumbTriggered*/, 0, moveThumb);
 
   // Fingers
-  processFinger(indexTriggered || middleTriggered || ringTriggered || pinkyTriggered && forceIndexTriggered, 1, moveFingers);
+  processFinger((indexTriggered || middleTriggered || ringTriggered || pinkyTriggered)/* && forceIndexTriggered*/, 1, moveFingers);
 
 }
 
